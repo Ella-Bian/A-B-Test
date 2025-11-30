@@ -1,11 +1,12 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useEffect, useState } from 'react';
 import { 
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, 
   RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar 
 } from 'recharts';
 import { TestConfig, Phase1Result, Phase2Result } from '../types';
-import { RotateCcw } from 'lucide-react';
+import { RotateCcw, Loader2 } from 'lucide-react';
 import { Button } from './Button';
+import { getAllSessionsData, AllSessionsData } from '../utils/api';
 
 interface AnalysisDashboardProps {
   config: TestConfig;
@@ -20,11 +21,49 @@ export const AnalysisDashboard: React.FC<AnalysisDashboardProps> = ({
   phase2Data,
   onReset 
 }) => {
+  const [allData, setAllData] = useState<AllSessionsData | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  // 从后端加载所有用户数据
+  useEffect(() => {
+    const loadAllData = async () => {
+      try {
+        setLoading(true);
+        const data = await getAllSessionsData();
+        setAllData(data);
+        setError(null);
+      } catch (err) {
+        console.error('Failed to load all sessions data:', err);
+        setError('无法加载所有用户数据，将显示当前会话数据');
+        // 如果加载失败，使用传入的当前会话数据
+        setAllData({
+          sessions: [],
+          phase1Results: phase1Data,
+          phase2Results: phase2Data,
+          totalParticipants: 1
+        });
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    loadAllData();
+  }, []);
+
+  // 使用所有用户的数据进行分析
+  const aggregatedPhase1Data = useMemo(() => {
+    return allData?.phase1Results || phase1Data;
+  }, [allData, phase1Data]);
+
+  const aggregatedPhase2Data = useMemo(() => {
+    return allData?.phase2Results || phase2Data;
+  }, [allData, phase2Data]);
   // --- Data Processing for Semantic Fit (Phase 1) ---
   const semanticFitData = useMemo(() => {
     return config.keywords.map(kw => {
       const getRate = (group: 'A' | 'B') => {
-        const trials = phase1Data.filter(r => r.group === group && r.keyword === kw);
+        const trials = aggregatedPhase1Data.filter(r => r.group === group && r.keyword === kw);
         if (trials.length === 0) return 0;
         const matches = trials.filter(r => r.isMatch).length;
         return (matches / trials.length) * 100;
@@ -36,14 +75,14 @@ export const AnalysisDashboard: React.FC<AnalysisDashboardProps> = ({
         GroupB: parseFloat(getRate('B').toFixed(1)),
       };
     });
-  }, [config.keywords, phase1Data]);
+  }, [config.keywords, aggregatedPhase1Data]);
 
   // --- Data Processing for Cognitive Fluency (Phase 1) ---
   const fluencyData = useMemo(() => {
     return config.keywords.map(kw => {
       const getAvgTime = (group: 'A' | 'B') => {
         // Only count trials where the user said YES (Match)
-        const matches = phase1Data.filter(r => r.group === group && r.keyword === kw && r.isMatch);
+        const matches = aggregatedPhase1Data.filter(r => r.group === group && r.keyword === kw && r.isMatch);
         if (matches.length === 0) return 0;
         const totalTime = matches.reduce((acc, curr) => acc + curr.reactionTimeMs, 0);
         return Math.round(totalTime / matches.length);
@@ -55,36 +94,58 @@ export const AnalysisDashboard: React.FC<AnalysisDashboardProps> = ({
         GroupB: getAvgTime('B'),
       };
     });
-  }, [config.keywords, phase1Data]);
+  }, [config.keywords, aggregatedPhase1Data]);
 
   // --- Data Processing for Global Association (Phase 2) ---
   const impressionData = useMemo(() => {
-    // Since we likely only have 1 participant in this demo session, 
-    // the radar chart simply shows if the keyword was selected (1 or 0).
-    // In a real app, this would be an aggregate of 20 users.
-    
+    // 聚合所有用户的Phase2数据
     return config.keywords.map(kw => {
       const getScore = (group: 'A' | 'B') => {
-        // Find phase 2 result for this group
-        const result = phase2Data.find(p => p.group === group);
-        return result?.selectedKeywords.includes(kw) ? 100 : 0;
+        // 统计选择该关键词的用户数量
+        const results = aggregatedPhase2Data.filter(p => p.group === group);
+        if (results.length === 0) return 0;
+        const selectedCount = results.filter(p => p.selectedKeywords.includes(kw)).length;
+        return (selectedCount / results.length) * 100;
       };
 
       return {
         keyword: kw,
-        GroupA: getScore('A'),
-        GroupB: getScore('B'),
+        GroupA: parseFloat(getScore('A').toFixed(1)),
+        GroupB: parseFloat(getScore('B').toFixed(1)),
         fullMark: 100,
       };
     });
-  }, [config.keywords, phase2Data]);
+  }, [config.keywords, aggregatedPhase2Data]);
+
+  if (loading) {
+    return (
+      <div className="max-w-6xl mx-auto p-6 space-y-12 animate-fade-in pb-20">
+        <div className="flex flex-col items-center justify-center min-h-[60vh] space-y-4">
+          <Loader2 className="animate-spin text-primary" size={48} />
+          <p className="text-slate-600">正在加载所有用户数据...</p>
+        </div>
+      </div>
+    );
+  }
+
+  const totalParticipants = allData?.totalParticipants || 1;
 
   return (
     <div className="max-w-6xl mx-auto p-6 space-y-12 animate-fade-in pb-20">
       <div className="flex justify-between items-center border-b border-slate-200 pb-6">
         <div>
           <h1 className="text-3xl font-bold text-slate-900">Analysis Report</h1>
-          <p className="text-slate-500">Quantitative insights for {config.title}</p>
+          <p className="text-slate-500">
+            Quantitative insights for {config.title}
+            {totalParticipants > 1 && (
+              <span className="ml-2 text-primary font-semibold">
+                ({totalParticipants} participants)
+              </span>
+            )}
+          </p>
+          {error && (
+            <p className="text-sm text-amber-600 mt-1">{error}</p>
+          )}
         </div>
         <Button onClick={onReset} variant="outline" className="gap-2">
           <RotateCcw size={16} /> New Test

@@ -6,6 +6,7 @@ import { ParticipantPhase1 } from './components/ParticipantPhase1';
 import { ParticipantPhase2 } from './components/ParticipantPhase2';
 import { AnalysisDashboard } from './components/AnalysisDashboard';
 import { Link, Beaker } from 'lucide-react';
+import { createSession, savePhase1Results, savePhase2Results } from './utils/api';
 
 const App = () => {
   const [view, setView] = useState<ViewState>('creator');
@@ -20,25 +21,64 @@ const App = () => {
 
   const [phase1Results, setPhase1Results] = useState<Phase1Result[]>([]);
   const [phase2Results, setPhase2Results] = useState<Phase2Result[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [participantId, setParticipantId] = useState<string | null>(null);
 
   const handleStartTest = (config: TestConfig) => {
     setTestConfig(config);
     setView('landing'); // Move to "Share Link" view
   };
 
-  const handlePhase1Complete = (results: Phase1Result[]) => {
+  const handleStartPhase1 = async () => {
+    try {
+      // 创建新会话（自动生成participant_id）
+      const response = await createSession(testConfig);
+      setSessionId(response.sessionId);
+      setParticipantId(response.participantId);
+      setView('phase1');
+    } catch (error) {
+      console.error('Failed to create session:', error);
+      alert('无法连接到服务器，请确保后端服务正在运行');
+    }
+  };
+
+  const handlePhase1Complete = async (results: Phase1Result[]) => {
     setPhase1Results(results);
+    
+    // 保存Phase1数据到后端
+    if (sessionId) {
+      try {
+        await savePhase1Results(sessionId, results);
+      } catch (error) {
+        console.error('Failed to save phase1 results:', error);
+        // 即使保存失败也继续流程
+      }
+    }
+    
     setView('phase2');
   };
 
-  const handlePhase2Complete = (results: Phase2Result[]) => {
+  const handlePhase2Complete = async (results: Phase2Result[]) => {
     setPhase2Results(results);
+    
+    // 保存Phase2数据到后端
+    if (sessionId) {
+      try {
+        await savePhase2Results(sessionId, results);
+      } catch (error) {
+        console.error('Failed to save phase2 results:', error);
+        // 即使保存失败也继续流程
+      }
+    }
+    
     setView('analysis');
   };
 
   const resetApp = () => {
     setPhase1Results([]);
     setPhase2Results([]);
+    setSessionId(null);
+    setParticipantId(null);
     setView('creator');
   };
 
@@ -91,7 +131,7 @@ const App = () => {
 
              <div className="pt-4">
                <button 
-                onClick={() => setView('phase1')}
+                onClick={handleStartPhase1}
                 className="w-full bg-primary text-white py-3 px-6 rounded-lg font-bold hover:bg-indigo-600 transition-colors shadow-md shadow-indigo-200"
                >
                  Simulate Participant View
